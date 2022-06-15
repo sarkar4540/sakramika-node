@@ -34,33 +34,37 @@ def setup():
     db = sqlite3.connect(db_name)
     cur = db.cursor()
     cur.execute(
+        "CREATE TABLE IF NOT EXISTS Registry(Id INTEGER PRIMARY KEY AUTOINCREMENT, IpAddress TEXT);")
+    cur.execute(
         "CREATE TABLE IF NOT EXISTS Workflow(Id INTEGER PRIMARY KEY AUTOINCREMENT, Title TEXT, InputDataTypeId INT, OutputDataTypeId INT);")
     cur.execute(
         "CREATE TABLE IF NOT EXISTS Node(Id INTEGER PRIMARY KEY AUTOINCREMENT, Title TEXT, IpAddress TEXT);")
     cur.execute(
-        "CREATE TABLE IF NOT EXISTS Service(Id INTEGER PRIMARY KEY AUTOINCREMENT, Title TEXT, NodeId INT, WorkflowId INT,NodeServiceId INT, UniformServiceId INT);")
+        "CREATE TABLE IF NOT EXISTS Service(Id INTEGER PRIMARY KEY AUTOINCREMENT, Title TEXT, NodeId INT REFERENCES Node(Id), WorkflowId INT REFERENCES Workflow(Id),NodeServiceId INT, UniformServiceId INT);")
     cur.execute(
         "CREATE TABLE IF NOT EXISTS Task(Id INTEGER PRIMARY KEY AUTOINCREMENT, Title TEXT, Type INT, InputDataTypeId INT, OutputDataTypeId INT);")
     cur.execute(
-        "CREATE TABLE IF NOT EXISTS TaskParam(Id INTEGER PRIMARY KEY AUTOINCREMENT, TaskId INT, Title TEXT, Value TEXT);")
+        "CREATE TABLE IF NOT EXISTS TaskParam(Id INTEGER PRIMARY KEY AUTOINCREMENT, TaskId INT REFERENCES Task(Id), Title TEXT, Value TEXT);")
     cur.execute(
-        "CREATE TABLE IF NOT EXISTS TaskInstance(Id INTEGER PRIMARY KEY AUTOINCREMENT, WorkflowId INT, TaskId INT, ScreenX INT, ScreenY INT);")
+        "CREATE TABLE IF NOT EXISTS TaskInstance(Id INTEGER PRIMARY KEY AUTOINCREMENT, WorkflowId INT REFERENCES Workflow(Id), TaskId INT REFERENCES Task(Id), ScreenX INT, ScreenY INT);")
     cur.execute(
-        "CREATE TABLE IF NOT EXISTS Edge(Id INTEGER PRIMARY KEY AUTOINCREMENT, WorkflowId INT, TaskInstanceId1 INT, DataIndexId1 INT, TaskInstanceId2 INT, DataIndexId2 INT);")
+        "CREATE TABLE IF NOT EXISTS Edge(Id INTEGER PRIMARY KEY AUTOINCREMENT,  WorkflowId INT REFERENCES Workflow(Id), TaskInstanceId1 INT REFERENCES TaskInstance(Id), DataIndexId1 INT REFERENCES DataIndex(Id), TaskInstanceId2 INT REFERENCES TaskInstance(Id), DataIndexId2 INT REFERENCES DataIndex(Id));")
     cur.execute(
         "CREATE TABLE IF NOT EXISTS DataIndex(Id INTEGER PRIMARY KEY AUTOINCREMENT);")
     cur.execute(
-        "CREATE TABLE IF NOT EXISTS DataIndexValue(Id INTEGER PRIMARY KEY AUTOINCREMENT, DataIndexId INT, Value INT);")
+        "CREATE TABLE IF NOT EXISTS DataIndexValue(Id INTEGER PRIMARY KEY AUTOINCREMENT, DataIndexId INT REFERENCES DataIndex(Id), Value INT);")
     cur.execute(
         "CREATE TABLE IF NOT EXISTS Data(Id INTEGER PRIMARY KEY AUTOINCREMENT, Title TEXT, DataTypeId INT, Created TEXT);")
     cur.execute(
-        "CREATE TABLE IF NOT EXISTS UnitData(Id INTEGER PRIMARY KEY AUTOINCREMENT, DataId INT, Value TEXT);")
+        "CREATE TABLE IF NOT EXISTS UnitData(Id INTEGER PRIMARY KEY AUTOINCREMENT, DataId INT REFERENCES Data(Id), Value TEXT);")
     cur.execute(
-        "CREATE TABLE IF NOT EXISTS WorkflowExecution(Id INTEGER PRIMARY KEY AUTOINCREMENT, WorkflowId INT, EntryTime TEXT, InputDataId INT, ExecutionState INT, StartTime TEXT, OutputDataId INT, EndTime TEXT);")
+        "CREATE TABLE IF NOT EXISTS WorkflowExecution(Id INTEGER PRIMARY KEY AUTOINCREMENT,  WorkflowId INT REFERENCES Workflow(Id), EntryTime TEXT, InputDataId INT REFERENCES Data(Id), ExecutionState INT, StartTime TEXT, OutputDataId INT REFERENCES Data(Id), EndTime TEXT);")
     cur.execute(
-        "CREATE TABLE IF NOT EXISTS WorkflowExecutionParams(Id INTEGER PRIMARY KEY AUTOINCREMENT, WorkflowExecutionId INT, Title TEXT, Value TEXT);")
+        "CREATE TABLE IF NOT EXISTS WorkflowExecutionParams(Id INTEGER PRIMARY KEY AUTOINCREMENT, WorkflowExecutionId INT REFERENCES WorkflowExecution(Id), Title TEXT, Value TEXT);")
     cur.execute(
-        "CREATE TABLE IF NOT EXISTS TaskInstanceExecution(Id INTEGER PRIMARY KEY AUTOINCREMENT, WorkflowExecutionId INT, TaskInstanceId INT, EntryTime TEXT, InputDataId INT, ExecutionState INT, StartTime TEXT, OutputDataId INT, EndTime TEXT);")
+        "CREATE TABLE IF NOT EXISTS TaskInstanceExecution(Id INTEGER PRIMARY KEY AUTOINCREMENT, WorkflowExecutionId INT REFERENCES WorkflowExecution(Id), TaskInstanceId INT REFERENCES TaskInstance(Id), EntryTime TEXT, InputDataId INT REFERENCES Data(Id), ExecutionState INT, StartTime TEXT, OutputDataId INT REFERENCES Data(Id), EndTime TEXT);")
+    cur.execute(
+        "CREATE TABLE IF NOT EXISTS TaskInstanceExecutionParams(Id INTEGER PRIMARY KEY AUTOINCREMENT, TaskInstanceExecutionId INT REFERENCES TaskInstanceExecution(Id), Title TEXT, Value TEXT);")
     db.commit()
     db.close()
 
@@ -81,7 +85,7 @@ def workflow():
     return json.dumps(workflows)
 
 
-@app.route("/workflow/<id>", methods=["GET", "POST", "PATCH", "DELETE"])
+@app.route("/workflow/<int:id>", methods=["GET", "POST", "PATCH", "DELETE"])
 def workflow_id(id):
     if request.method == "GET":
         db = sqlite3.connect(db_name)
@@ -145,7 +149,7 @@ def node():
     return json.dumps(nodes)
 
 
-@app.route("/node/<id>", methods=["GET", "POST", "PATCH", "DELETE"])
+@app.route("/node/<int:id>", methods=["GET", "POST", "PATCH", "DELETE"])
 def node_id(id):
     if request.method == "GET":
         db = sqlite3.connect(db_name)
@@ -198,7 +202,7 @@ def node_id(id):
     return "{error:'Invalid method'}"
 
 
-@app.route("/workflow/<id>/service", methods=["GET", "POST", "DELETE"])
+@app.route("/workflow/<int:id>/service", methods=["GET", "POST", "DELETE"])
 def workflow_id_service(id):
     if request.method == "GET":
         db = sqlite3.connect(db_name)
@@ -255,7 +259,7 @@ def service_queuecount():
     return json.dumps({'count': count})
 
 
-@app.route("/service/<serviceId>/<nodeId>/<inputDataId>", methods=['POST'])
+@app.route("/service/<int:serviceId>/<int:nodeId>/<int:inputDataId>")
 def service_start(serviceId, nodeId, inputDataId):
     db = sqlite3.connect(db_name)
     cur = db.cursor()
@@ -284,13 +288,14 @@ def service_start(serviceId, nodeId, inputDataId):
         cur.execute("INSERT INTO TaskInstanceExecutionParams (Title,Value,TaskInstanceExecutionId) VALUES (?,?,?);", [
             'remoteWorkflowExecutionId', res['workflowExecutionId'], taskInstanceExecutionId])
         db.commit()
-        node.update({ "remote": res, "taskInstanceExecutionId": taskInstanceExecutionId})
+        node.update(
+            {"remote": res, "taskInstanceExecutionId": taskInstanceExecutionId})
         return json.dumps(node)
     db.close()
     return json.dumps({"error": "nodeId not found"})
 
 
-@app.route("/service/<id>/start", methods=['POST'])
+@app.route("/service/<int:id>/start", methods=['POST'])
 def service_start_id(id):
     db = sqlite3.connect(db_name)
     cur = db.cursor()
@@ -320,7 +325,7 @@ def service_start_id(id):
     return json.dumps({'workflowExecutionId': workflowExecutionId, "title": workflow[2]})
 
 
-@app.route("/taskInstanceExecution/<taskExecutionId>/end", methods=['POST'])
+@app.route("/taskInstanceExecution/<int:taskExecutionId>/end", methods=['POST'])
 def service_callback(taskExecutionId):
     db = sqlite3.connect(db_name)
     cur = db.cursor()
@@ -364,7 +369,7 @@ def service_execution():
     return json.dumps(executions)
 
 
-@app.route("/service/execution/<workflowExecutionId>")
+@app.route("/service/execution/<int:workflowExecutionId>")
 def service_execution_id(workflowExecutionId):
     db = sqlite3.connect(db_name)
     cur = db.cursor()
@@ -380,7 +385,7 @@ def service_execution_id(workflowExecutionId):
     return json.dumps(execution)
 
 
-@app.route("/service/execution/<workflowExecutionId>/kill")
+@app.route("/service/execution/<int:workflowExecutionId>/kill")
 def service_kill(workflowExecutionId):
     db = sqlite3.connect(db_name)
     cur = db.cursor()
@@ -411,7 +416,7 @@ def task():
     return json.dumps(tasks)
 
 
-@app.route("/task/<id>", methods=["GET", "POST", "DELETE"])
+@app.route("/task/<int:id>", methods=["GET", "POST", "DELETE"])
 def task_id(id):
     if request.method == "GET":
         db = sqlite3.connect(db_name)
@@ -462,7 +467,7 @@ def task_id(id):
     return "{error:'Invalid method'}"
 
 
-@app.route("/workflow/<workflowId>/taskInstance")
+@app.route("/workflow/<int:workflowId>/taskInstance")
 def taskInstance(workflowId):
     db = sqlite3.connect(db_name)
     cur = db.cursor()
@@ -490,7 +495,7 @@ def taskInstance(workflowId):
     return json.dumps(tasks)
 
 
-@app.route("/taskInstance/<id>", methods=["GET", "POST", "DELETE"])
+@app.route("/taskInstance/<int:id>", methods=["GET", "POST", "DELETE"])
 def taskInstance_id(id):
     if request.method == "GET":
         db = sqlite3.connect(db_name)
@@ -549,7 +554,7 @@ def taskInstance_id(id):
     return "{error:'Invalid method'}"
 
 
-@app.route("/workflow/<workflowId>/edge")
+@app.route("/workflow/<int:workflowId>/edge")
 def edge(workflowId):
     db = sqlite3.connect(db_name)
     cur = db.cursor()
@@ -569,7 +574,7 @@ def edge(workflowId):
     return json.dumps(edges)
 
 
-@app.route("/edge/<id>", methods=["GET", "POST", "DELETE"])
+@app.route("/edge/<int:id>", methods=["GET", "POST", "DELETE"])
 def edge_id(id):
     if request.method == "GET":
         db = sqlite3.connect(db_name)
@@ -649,7 +654,7 @@ def data():
     return json.dumps(data)
 
 
-@app.route("/data/<id>", methods=["GET", "POST", "PATCH", "DELETE"])
+@app.route("/data/<int:id>", methods=["GET", "POST", "PATCH", "DELETE"])
 def data_id(id):
     if request.method == "GET":
         db = sqlite3.connect(db_name)
@@ -675,7 +680,7 @@ def data_id(id):
             _data = dict(zip(['id', 'title', 'dataTypeId', 'created'], row))
         for unitdata in data['values']:
             cur.execute("INSERT INTO UnitData (DataId,Value) VALUES (?,?);",
-                        [data['id'], unitdata])
+                        [_data['id'], unitdata])
         _data['values'] = data['values']
         db.commit()
         db.close()
@@ -703,19 +708,28 @@ def data_id(id):
         return json.dumps(workflow)
     return "{error:'Invalid method'}"
 
-@app.route("/workflow/<workflowId>/execute", methods=["POST"])
-def workflow_execute(workflowId):
-    if request.method == "POST":
-        workflowExecution = request.get_json(force=True)
-        db = sqlite3.connect(db_name)
-        cur = db.cursor()
-        cur.execute("INSERT INTO WorkflowExecution (WorkflowId, InputDataId, EntryTime, ExecutionState) VALUES (?,?,?,?);",
-                    [workflowId, workflowExecution['dataId'], time(), STATE_LOADED])
-        workflowExecution['id'] = cur.lastrowid
-        db.commit()
-        db.close()
-        return json.dumps(workflowExecution)
-    return "{error:'Invalid method'}"
+
+@app.route("/workflow/<int:workflowId>/<int:dataId>/execute")
+def workflow_execute(workflowId, dataId):
+    workflowExecution = dict()
+    db = sqlite3.connect(db_name)
+    cur = db.cursor()
+    cur.execute("INSERT INTO WorkflowExecution (WorkflowId, InputDataId, EntryTime, ExecutionState) VALUES (?,?,?,?);",
+                [workflowId, dataId, time(), STATE_LOADED])
+    workflowExecution['id'] = cur.lastrowid
+    db.commit()
+    db.close()
+    return json.dumps(workflowExecution)
+
+
+@app.route("/sitemap")
+def sitemap():
+    routes = []
+    i = 0
+    for r in app.url_map._rules:
+        i = i+1
+        routes.append([i, r.rule, ",".join(list(r.methods))])
+    return json.dumps(routes)
 
 
 setup()

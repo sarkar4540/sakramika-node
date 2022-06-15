@@ -1,5 +1,7 @@
 import json
 import math
+import sys
+import traceback
 import requests
 import sqlite3
 
@@ -39,41 +41,42 @@ class Jallad:
         self.registry_protocol = registry_protocol
         self.registry_host = registry_host
         self.registry_port = registry_port
-        db = sqlite3.connect(self.db_name)
-        cur = db.cursor()
+        self.db = sqlite3.connect(self.db_name)
+        cur = self.db.cursor()
+        cur.execute(
+            "CREATE TABLE IF NOT EXISTS Registry(Id INTEGER PRIMARY KEY AUTOINCREMENT, IpAddress TEXT);")
         cur.execute(
             "CREATE TABLE IF NOT EXISTS Workflow(Id INTEGER PRIMARY KEY AUTOINCREMENT, Title TEXT, InputDataTypeId INT, OutputDataTypeId INT);")
         cur.execute(
             "CREATE TABLE IF NOT EXISTS Node(Id INTEGER PRIMARY KEY AUTOINCREMENT, Title TEXT, IpAddress TEXT);")
         cur.execute(
-            "CREATE TABLE IF NOT EXISTS Service(Id INTEGER PRIMARY KEY AUTOINCREMENT, Title TEXT, NodeId INT, WorkflowId INT,NodeServiceId INT, UniformServiceId INT);")
+            "CREATE TABLE IF NOT EXISTS Service(Id INTEGER PRIMARY KEY AUTOINCREMENT, Title TEXT, NodeId INT REFERENCES Node(Id), WorkflowId INT REFERENCES Workflow(Id),NodeServiceId INT, UniformServiceId INT);")
         cur.execute(
             "CREATE TABLE IF NOT EXISTS Task(Id INTEGER PRIMARY KEY AUTOINCREMENT, Title TEXT, Type INT, InputDataTypeId INT, OutputDataTypeId INT);")
         cur.execute(
-            "CREATE TABLE IF NOT EXISTS TaskParam(Id INTEGER PRIMARY KEY AUTOINCREMENT, TaskId INT, Title TEXT, Value TEXT);")
+            "CREATE TABLE IF NOT EXISTS TaskParam(Id INTEGER PRIMARY KEY AUTOINCREMENT, TaskId INT REFERENCES Task(Id), Title TEXT, Value TEXT);")
         cur.execute(
-            "CREATE TABLE IF NOT EXISTS TaskInstance(Id INTEGER PRIMARY KEY AUTOINCREMENT, WorkflowId INT, TaskId INT, ScreenX INT, ScreenY INT);")
+            "CREATE TABLE IF NOT EXISTS TaskInstance(Id INTEGER PRIMARY KEY AUTOINCREMENT, WorkflowId INT REFERENCES Workflow(Id), TaskId INT REFERENCES Task(Id), ScreenX INT, ScreenY INT);")
         cur.execute(
-            "CREATE TABLE IF NOT EXISTS Edge(Id INTEGER PRIMARY KEY AUTOINCREMENT, WorkflowId INT, TaskInstanceId1 INT, DataIndexId1 INT, TaskInstanceId2 INT, DataIndexId2 INT);")
+            "CREATE TABLE IF NOT EXISTS Edge(Id INTEGER PRIMARY KEY AUTOINCREMENT,  WorkflowId INT REFERENCES Workflow(Id), TaskInstanceId1 INT REFERENCES TaskInstance(Id), DataIndexId1 INT REFERENCES DataIndex(Id), TaskInstanceId2 INT REFERENCES TaskInstance(Id), DataIndexId2 INT REFERENCES DataIndex(Id));")
         cur.execute(
             "CREATE TABLE IF NOT EXISTS DataIndex(Id INTEGER PRIMARY KEY AUTOINCREMENT);")
         cur.execute(
-            "CREATE TABLE IF NOT EXISTS DataIndexValue(Id INTEGER PRIMARY KEY AUTOINCREMENT, DataIndexId INT, Value INT);")
+            "CREATE TABLE IF NOT EXISTS DataIndexValue(Id INTEGER PRIMARY KEY AUTOINCREMENT, DataIndexId INT REFERENCES DataIndex(Id), Value INT);")
         cur.execute(
             "CREATE TABLE IF NOT EXISTS Data(Id INTEGER PRIMARY KEY AUTOINCREMENT, Title TEXT, DataTypeId INT, Created TEXT);")
         cur.execute(
-            "CREATE TABLE IF NOT EXISTS UnitData(Id INTEGER PRIMARY KEY AUTOINCREMENT, DataId INT, Value TEXT);")
+            "CREATE TABLE IF NOT EXISTS UnitData(Id INTEGER PRIMARY KEY AUTOINCREMENT, DataId INT REFERENCES Data(Id), Value TEXT);")
         cur.execute(
-            "CREATE TABLE IF NOT EXISTS WorkflowExecution(Id INTEGER PRIMARY KEY AUTOINCREMENT, WorkflowId INT, EntryTime TEXT, InputDataId INT, ExecutionState INT, StartTime TEXT, OutputDataId INT, EndTime TEXT);")
+            "CREATE TABLE IF NOT EXISTS WorkflowExecution(Id INTEGER PRIMARY KEY AUTOINCREMENT,  WorkflowId INT REFERENCES Workflow(Id), EntryTime TEXT, InputDataId INT REFERENCES Data(Id), ExecutionState INT, StartTime TEXT, OutputDataId INT REFERENCES Data(Id), EndTime TEXT);")
         cur.execute(
-            "CREATE TABLE IF NOT EXISTS WorkflowExecutionParams(Id INTEGER PRIMARY KEY AUTOINCREMENT, WorkflowExecutionId INT, Title TEXT, Value TEXT);")
+            "CREATE TABLE IF NOT EXISTS WorkflowExecutionParams(Id INTEGER PRIMARY KEY AUTOINCREMENT, WorkflowExecutionId INT REFERENCES WorkflowExecution(Id), Title TEXT, Value TEXT);")
         cur.execute(
-            "CREATE TABLE IF NOT EXISTS TaskInstanceExecution(Id INTEGER PRIMARY KEY AUTOINCREMENT, WorkflowExecutionId INT, TaskInstanceId INT, EntryTime TEXT, InputDataId INT, ExecutionState INT, StartTime TEXT, OutputDataId INT, EndTime TEXT);")
+            "CREATE TABLE IF NOT EXISTS TaskInstanceExecution(Id INTEGER PRIMARY KEY AUTOINCREMENT, WorkflowExecutionId INT REFERENCES WorkflowExecution(Id), TaskInstanceId INT REFERENCES TaskInstance(Id), EntryTime TEXT, InputDataId INT REFERENCES Data(Id), ExecutionState INT, StartTime TEXT, OutputDataId INT REFERENCES Data(Id), EndTime TEXT);")
         cur.execute(
-            "CREATE TABLE IF NOT EXISTS TaskInstanceExecutionParams(Id INTEGER PRIMARY KEY AUTOINCREMENT, TaskInstanceExecutionId INT, Title TEXT, Value TEXT);")
-        db.commit()
+            "CREATE TABLE IF NOT EXISTS TaskInstanceExecutionParams(Id INTEGER PRIMARY KEY AUTOINCREMENT, TaskInstanceExecutionId INT REFERENCES TaskInstanceExecution(Id), Title TEXT, Value TEXT);")
+        self.db.commit()
         cur.close()
-        db.close()
 
     def updateDataTypes(self):
         self.data_types = requests.get(
@@ -86,82 +89,71 @@ class Jallad:
         return {'id': 0, 'base': DATATYPE_NONE, 'length': 0}
 
     def data(self, id: int):
-        db = sqlite3.connect(self.db_name)
-        cur = db.cursor()
+        cur = self.db.cursor()
         data = None
         for row in cur.execute("SELECT * FROM Data WHERE Id=?;", [id]):
             data = dict(zip(['id', 'title', 'dataTypeId', 'created'], row))
-            cur2 = db.cursor()
+            cur2 = self.db.cursor()
             data['values'] = [row2[0] for row2 in cur2.execute(
                 "SELECT Value FROM UnitData Where DataId=?;", [data['id']])]
             cur2.close()
         cur.close()
-        db.close()
         return data
 
     def saveData(self, dataTypeId: int, values: list, title: str = 'Interprocess'):
-        db = sqlite3.connect(self.db_name)
-        cur = db.cursor()
+        cur = self.db.cursor()
         cur.execute("INSERT INTO Data (Title, DataTypeId, Created) VALUES (?,?,?);",
                     [title, dataTypeId, time.time()])
         dataId = cur.lastrowid
         for unitdata in values:
             cur.execute("INSERT INTO UnitData (DataId,Value) VALUES (?,?);",
                         [dataId, unitdata])
-        db.commit()
+        self.db.commit()
         cur.close()
-        db.close()
         return dataId
 
     def workflow(self, id: int):
-        db = sqlite3.connect(self.db_name)
-        cur = db.cursor()
+        cur = self.db.cursor()
         workflow = [dict(zip(['id', 'title', 'inputDataTypeId', 'outputDataTypeId'], row)) for row in cur.execute(
             "SELECT * FROM Workflow WHERE Id=(?);", (id))]
         cur.close()
-        db.close()
         return workflow
 
     def edge(self, id: int):
-        db = sqlite3.connect(self.db_name)
-        cur = db.cursor()
+        cur = self.db.cursor()
         edge = None
         for row in cur.execute("SELECT * FROM Edge WHERE Id=?;", [id]):
             edge = dict(
                 zip(['id', 'workflowId', 'taskInstanceId1', 'dataIndexId1', 'taskInstanceId2', 'dataIndexId2'], row))
-            cur2 = db.cursor()
+            cur2 = self.db.cursor()
             edge['dataIndex1'] = [row2[0] for row2 in cur2.execute(
                 "SELECT Value FROM DataIndexValue WHERE DataIndexId=?;", [edge['dataIndexId1']])]
             edge['dataIndex2'] = [row2[0] for row2 in cur2.execute(
                 "SELECT Value FROM DataIndexValue WHERE DataIndexId=?;", [edge['dataIndexId2']])]
             cur2.close()
-        db.commit()
-        db.close()
+        self.db.commit()
         return edge
 
     def task(self, id: int):
-        db = sqlite3.connect(self.db_name)
-        cur = db.cursor()
+        cur = self.db.cursor()
         task = None
         for row in cur.execute("SELECT * FROM Task WHERE Id=?;", [id]):
             task = dict(
                 zip(['id', 'title', 'type', 'inputDataTypeId', 'outputDataTypeId'], row))
-            cur2 = db.cursor()
+            cur2 = self.db.cursor()
             for row2 in cur2.execute("SELECT Title,Value FROM TaskParam WHERE TaskId=?;", [task['id']]):
                 task[row2[0]] = row2[1]
             cur2.close()
         cur.close()
-        db.close()
         return task
 
     def taskInstance(self, id: int, taskId: int = None):
-        db = sqlite3.connect(self.db_name)
-        cur = db.cursor()
+        cur = self.db.cursor()
         task = None
         for row in cur.execute("SELECT * FROM TaskInstance WHERE Id=?;", [id]):
             task = dict(
                 zip(['id', 'workflowId', 'taskId', 'screenX', 'screenY'], row))
-            cur2 = db.cursor()
+            cur2 = self.db.cursor()
             if task['taskId'] == 0:
                 start = len([row2[0] for row2 in cur2.execute(
                     "SELECT Id FROM TaskInstance WHERE TaskId=0 AND Id=? AND Id=(SELECT Id FROM TaskInstance WHERE WorkflowId=? AND TaskId=0 ORDER BY Id ASC LIMIT 1);",
@@ -177,7 +169,6 @@ class Jallad:
                 task.update(self.task(task['taskId']))
             cur2.close()
         cur.close()
-        db.close()
         return task
 
     def dataUsingDataIndex(self, data, dataIndex):
@@ -207,10 +198,12 @@ class Jallad:
                                     i*len(currentDataType['subDataTypes'])+g, subDataTypeIndex)
                     else:
                         if foundIndex:
-                            # print(":dataIndexed:j:"+str(j))
-                            # print(":dataIndexed:currentIndex:"+str(currentIndex))
+                            #print(":dataIndexed:j:"+str(j))
+                            print(":dataIndexed:currentIndex:"+str(currentIndex))
                             if currentIndex[:len(dataIndex)] == dataIndex:
-                                # print(data['values'][j-1])
+                                print(j)
+                                print(json.dumps(data))
+                                print(data['values'][j-1])
                                 values.append(data['values'][j-1])
                             else:
                                 break
@@ -246,17 +239,17 @@ class Jallad:
         return values
 
     def queueNextTaskInstances(self):
-        db = sqlite3.connect(self.db_name)
-        cur = db.cursor()
+        cur = self.db.cursor()
         queuedTaskInstances = [taskInstance for taskInstance in cur.execute(
             "SELECT TaskInstanceId,WorkflowExecutionId FROM TaskInstanceExecution WHERE ExecutionState=?;", [STATE_QUEUED])]
         nextTaskInstances = []
         for unmarkedTaskInstanceExecution in cur.execute(
                 "SELECT TaskInstanceExecution.Id,TaskInstanceExecution.TaskInstanceId,TaskInstanceExecution.OutputDataId,WorkflowExecution.Id,WorkflowExecution.WorkflowId FROM TaskInstanceExecution JOIN WorkflowExecution ON (TaskInstanceExecution.WorkflowExecutionId=WorkflowExecution.Id) WHERE TaskInstanceExecution.ExecutionState=?", [STATE_ENDED]):
-            cur2 = db.cursor()
+            cur2 = self.db.cursor()
             cur2.execute("UPDATE TaskInstanceExecution SET ExecutionState=? WHERE Id=?;", [
                 STATE_MARKED, unmarkedTaskInstanceExecution[0]])
             # print("queueNext:unmarked:"+str(unmarkedTaskInstanceExecution))
+            self.db.commit()
             negEdgeTaskInstance = None
             edgeTaskInstances = []
             for edgeTaskInstance in cur2.execute(
@@ -293,16 +286,14 @@ class Jallad:
             cur.execute("INSERT INTO TaskInstanceExecution (WorkflowExecutionId,TaskInstanceId,EntryTime,ExecutionState) VALUES (?,?,?,?);", [
                         nextTaskInstance[1], nextTaskInstance[0], time.time(), STATE_QUEUED])
             # print("queueNext:added:"+str(cur.lastrowid))
-        db.commit()
+        self.db.commit()
         cur.close()
-        db.close()
 
     def loadQueuedTaskInstances(self):
-        db = sqlite3.connect(self.db_name)
-        cur = db.cursor()
+        cur = self.db.cursor()
         for loadedTaskInstance in cur.execute(
                 "SELECT TaskInstanceExecution.Id,TaskInstanceExecution.TaskInstanceId,WorkflowExecution.Id,Workflow.Id,Workflow.OutputDataTypeId,Workflow.Title FROM TaskInstanceExecution JOIN WorkflowExecution JOIN Workflow ON (TaskInstanceExecution.WorkflowExecutionId=WorkflowExecution.Id AND WorkflowExecution.WorkflowId=Workflow.Id) WHERE TaskInstanceExecution.ExecutionState=?;", [STATE_QUEUED]):
-            cur2 = db.cursor()
+            cur2 = self.db.cursor()
             edgesWithData = []
             toBeLoaded = True
             dataTypeId = [loadedTaskInstance[4], loadedTaskInstance[5], 0]
@@ -311,7 +302,7 @@ class Jallad:
             for edgeTaskInstance in cur2.execute(
                     "SELECT Id FROM Edge WHERE WorkflowId=? AND TaskInstanceId2=?;", [loadedTaskInstance[3], loadedTaskInstance[1]]):
                 edge = self.edge(edgeTaskInstance[0])
-                cur3 = db.cursor()
+                cur3 = self.db.cursor()
                 dataId1 = None
                 foundButPending = False
                 for taskInstanceExecution in cur3.execute("SELECT Id,ExecutionState,OutputDataId FROM TaskInstanceExecution WHERE WorkflowExecutionId=? AND TaskInstanceId=? ORDER BY Id DESC LIMIT 1;", [loadedTaskInstance[2], edge['taskInstanceId1']]):
@@ -333,10 +324,10 @@ class Jallad:
                     dataTypeId) == 2 else dataTypeId[1]+" Result")
                 cur2.execute("UPDATE TaskInstanceExecution SET InputDataId=?,ExecutionState=? WHERE Id=?;", [
                              dataId, STATE_LOADED, loadedTaskInstance[0]])
+                self.db.commit()
             cur2.close()
         cur.close()
-        db.commit()
-        db.close()
+        self.db.commit()
 
     def dataToText(self, data):
         text: str = ""
@@ -411,25 +402,28 @@ class Jallad:
 
     def objectToData(self, obj, dataTypeId):
         dataType = self.dataType(dataTypeId)
+        print(":objToData:datatype:"+str(dataType))
         if dataType['base'] == DATATYPE_FLOAT or dataType['base'] == DATATYPE_INT or dataType['base'] == DATATYPE_TEXT:
             return [obj]
         elif dataType['base'] == DATATYPE_STRUCTURE:
             values = []
             for elem in obj:
+                print(":objToData:elem:"+str(elem))
                 for subDataType in dataType['subDataTypes']:
+                    print(":objToData:subDataType:"+str(subDataType))
                     values.extend(self.objectToData(
                         elem[subDataType['title']], subDataType['subDataTypeId']))
+                print(":objToData:values:"+str(values))
             return values
         else:
             return []
 
     def executeSystem(self, task, inputData):
-        db = sqlite3.connect(self.db_name)
-        cur = db.cursor()
+        cur = self.db.cursor()
         inputText = self.dataToText(inputData)
         cur.execute("UPDATE TaskInstanceExecution SET ExecutionState=?,StartTime=? WHERE Id=?;", [
                     STATE_STARTED, time.time(), task['taskInstanceExecutionId']])
-        db.commit()
+        self.db.commit()
         p = Popen(task['command'].split(" "),
                   stdout=PIPE, stdin=PIPE, stderr=PIPE, text=True)
         outputText = p.communicate(inputText)
@@ -437,12 +431,10 @@ class Jallad:
             outputText, task['outputDataTypeId']), str(task['title'])+" Result")
         cur.execute("UPDATE TaskInstanceExecution SET OutputDataId=?,ExecutionState=?,EndTime=? WHERE Id=?;", [
                     outputDataId, STATE_ENDED, time.time(), task['taskInstanceExecutionId']])
-        db.commit()
-        db.close()
+        self.db.commit()
 
     def startService(self, task, inputData):
-        db = sqlite3.connect(self.db_name)
-        cur = db.cursor()
+        cur = self.db.cursor()
         nodes = [dict(zip(['id', 'ipAddress', 'workflowId', 'nodeServiceId'], row)) for row in cur.execute(
             "SELECT Node.id,Node.IpAddress,Service.WorkflowId,Service.NodeServiceId FROM Node JOIN Service ON(Node.Id=Service.NodeId OR Node.Id=0) WHERE Service.UniformServiceId=?;", [task['uniformServiceId']])]
         minCountNode = None
@@ -462,12 +454,10 @@ class Jallad:
                     'ipAddress', minCountNode['ipAddress'], task['taskInstanceExecutionId']])
         cur.execute("INSERT INTO TaskInstanceExecutionParams (Title,Value,TaskInstanceExecutionId) VALUES (?,?,?);", [
                     'workflowExecutionId', res['workflowExecutionId'], task['taskInstanceExecutionId']])
-        db.commit()
-        db.close()
+        self.db.commit()
 
     def checkService(self, task):
-        db = sqlite3.connect(self.db_name)
-        cur = db.cursor()
+        cur = self.db.cursor()
         nodeInfo = dict([row for row in cur.execute(
             "SELECT Title,Value FROM TaskInstanceExecutionParams WHERE TaskInstanceExecutionId=?;", [task['taskInstanceExecutionId']])])
         if "workflowExecutionId" in nodeInfo and "ipAddress" in nodeInfo:
@@ -478,11 +468,9 @@ class Jallad:
                     task['outputDataTypeId'], res['outputDataValues'], str(task['title'])+" Result")
                 cur.execute("UPDATE TaskInstanceExecution SET OutputDataId=?,ExecutionState=?,EndTime=? WHERE Id=?;", [
                     outputDataId, STATE_ENDED, time.time(), task['taskInstanceExecutionId']])
-        db.close()
 
     def loadWorkflow(self, task, inputData):
-        db = sqlite3.connect(self.db_name)
-        cur = db.cursor()
+        cur = self.db.cursor()
         cur.execute("UPDATE TaskInstanceExecution SET ExecutionState=?,StartTime=? WHERE Id=?;", [
                     STATE_STARTED, time.time(), task['taskInstanceExecutionId']])
         cur.execute("INSERT INTO WorkflowExecution (WorkflowId,InputDataId,ExecutionState,EntryTime) VALUES (?,?,?,?);", [
@@ -492,41 +480,50 @@ class Jallad:
             STATE_STARTED, task['taskInstanceExecutionId']])
         cur.execute("INSERT INTO WorkflowExecutionParams (Title,Value,WorkflowExecutionId) VALUES (?,?,?);", [
                     'taskInstanceExecutionId', task['taskInstanceExecutionId'], workflowExecutionId])
-        db.commit()
-        db.close()
+        self.db.commit()
 
     def executeWeb(self, task, inputData):
-        db = sqlite3.connect(self.db_name)
-        cur = db.cursor()
+        cur = self.db.cursor()
         inputObj = self.dataToObject(inputData)
         cur.execute("UPDATE TaskInstanceExecution SET ExecutionState=?,StartTime=? WHERE Id=?;", [
                     STATE_STARTED, time.time(), task['taskInstanceExecutionId']])
-        db.commit()
+        self.db.commit()
         outputObj = requests.request(url=task['url'], method=task['method'], data=(
             json.dumps(inputObj) if task['sendBody'] else None)).json()
         outputDataId = self.saveData(task['outputDataTypeId'], self.objectToData(
             outputObj, task['outputDataTypeId']), str(task['title'])+" Result")
         cur.execute("UPDATE TaskInstanceExecution SET OutputDataId=?,ExecutionState=?,EndTime=? WHERE Id=?;", [
                     outputDataId, STATE_ENDED, time.time(), task['taskInstanceExecutionId']])
-        db.close()
 
     def executeScript(self, task, inputData):
-        db = sqlite3.connect(self.db_name)
-        cur = db.cursor()
+        cur = self.db.cursor()
         cur.execute("UPDATE TaskInstanceExecution SET ExecutionState=?,StartTime=? WHERE Id=?;", [
                     STATE_STARTED, time.time(), task['taskInstanceExecutionId']])
-        db.commit()
-        locals = {"input": self.dataToObject(inputData)}
-        exec(task['code'], None, locals)
-        outputDataId = self.saveData(task['outputDataTypeId'], self.objectToData(
-            locals["output"], task['outputDataTypeId']), str(task['title'])+" Result")
-        cur.execute("UPDATE TaskInstanceExecution SET OutputDataId=?,ExecutionState=?,EndTime=? WHERE Id=?;", [
+        self.db.commit()
+        locals = {"input": self.dataToObject(inputData)[0]}
+        try:
+            exec(task['code'], globals(), locals)
+            print(locals)
+            outputDataId = 0
+            if "output" in locals:
+                outputData=self.objectToData(
+                    locals["output"], task['outputDataTypeId'])
+                print(outputData)
+                outputDataId = self.saveData(task['outputDataTypeId'], outputData, str(task['title'])+" Result")
+                print(outputDataId)
+            cur.execute("UPDATE TaskInstanceExecution SET OutputDataId=?,ExecutionState=?,EndTime=? WHERE Id=?;", [
                     outputDataId, STATE_ENDED, time.time(), task['taskInstanceExecutionId']])
-        db.close()
+        except Exception:
+            print(locals)
+            print(traceback.format_exc())
+            cur.execute("UPDATE TaskInstanceExecution SET ExecutionState=?,EndTime=? WHERE WorkflowExecutionId=?;", [
+                    STATE_FAILED, time.time(), task['workflowExecutionId']])
+            cur.execute("UPDATE WorkflowExecution SET ExecutionState=?,EndTime=? WHERE Id=?;", [
+                    STATE_FAILED, time.time(), task['workflowExecutionId']])
+        self.db.commit()
 
     def endWorkflowExecution(self, workflowExecution, outputData):
-        db = sqlite3.connect(self.db_name)
-        cur = db.cursor()
+        cur = self.db.cursor()
         cur.execute("UPDATE WorkflowExecution SET OutputDataId=?,ExecutionState=?,EndTime=? WHERE Id=?;", [
                     outputData['id'], STATE_ENDED, time.time(), workflowExecution['id']])
         print("workflow:end:"+str(outputData['values']))
@@ -539,22 +536,21 @@ class Jallad:
         if 'taskInstanceExecutionId' in params:
             cur.execute("UPDATE TaskInstanceExecution SET OutputDataId=?,ExecutionState=?,EndTime=? WHERE Id=?;", [
                 outputData['id'], STATE_ENDED, time.time(), params['taskInstanceExecutionId']])
-        db.close()
 
     def executeLoadedTaskInstances(self):
-        db = sqlite3.connect(self.db_name)
-        cur = db.cursor()
+        cur = self.db.cursor()
         for loadedTaskInstance in cur.execute(
                 "SELECT Id,TaskInstanceId,InputDataId,WorkflowExecutionId FROM TaskInstanceExecution WHERE ExecutionState=?;", [STATE_LOADED]):
-            cur2 = db.cursor()
+            cur2 = self.db.cursor()
             cur2.execute("UPDATE TaskInstanceExecution SET StartTime=?,ExecutionState=? WHERE Id=?;", [
                 time.time(), STATE_STARTED, loadedTaskInstance[0]])
-            db.commit()
+            self.db.commit()
             task = self.taskInstance(loadedTaskInstance[1])
             if task['type'] == TASK_DECISION:
                 task = self.taskInstance(
                     loadedTaskInstance[1], task('subTaskId'))
             task['taskInstanceExecutionId'] = loadedTaskInstance[0]
+            task['workflowExecutionId'] = loadedTaskInstance[3]
             inputData = self.data(loadedTaskInstance[2])
             if task['type'] == TASK_SYSTEM:
                 self.executeSystem(task, inputData)
@@ -577,14 +573,12 @@ class Jallad:
                     time.time(), STATE_ENDED, loadedTaskInstance[0]])
             cur2.close()
         cur.close()
-        db.commit()
-        db.close()
+        self.db.commit()
 
     def startLoadedWorkflows(self):
-        db = sqlite3.connect(self.db_name)
-        cur = db.cursor()
+        cur = self.db.cursor()
         for row in cur.execute("SELECT * FROM WorkflowExecution WHERE ExecutionState=? ORDER BY Id ASC LIMIT 1;", [STATE_LOADED]):
-            cur2 = db.cursor()
+            cur2 = self.db.cursor()
             workflowExecution = dict(
                 zip(['id', 'workflowId', 'entryTime', 'inputDataId', 'executionState', 'startTime', 'outputDataId', 'endTime'], row))
             cur2.execute("UPDATE WorkflowExecution SET ExecutionState=?,StartTime=? WHERE Id=? RETURNING WorkflowId;", [
@@ -596,19 +590,16 @@ class Jallad:
                     workflowExecution['id'], terminal, time.time(), 0, STATE_ENDED, time.time(), workflowExecution['inputDataId'], time.time()])
             cur2.close()
         cur.close()
-        db.commit()
-        db.close()
+        self.db.commit()
 
     def workflowExecution(self, workflowExecutionId: int):
-        db = sqlite3.connect(self.db_name)
-        cur = db.cursor()
+        cur = self.db.cursor()
         workflowExecution = None
         for row in cur.execute("SELECT * FROM WorkflowExecution WHERE Id=?;", [workflowExecutionId]):
             workflowExecution = dict(
                 zip(['id', 'workflowId', 'entryTime', 'inputDataId', 'executionState', 'startTime', 'outputDataId', 'endTime'], row))
             for row2 in cur.execute("SELECT Title,Value FROM WorkflowExecutionParams WHERE WorkflowExecutionId=?;", [workflowExecutionId]):
                 workflowExecution[row2[0]] = row2[1]
-        db.close()
         return workflowExecution
 
 
